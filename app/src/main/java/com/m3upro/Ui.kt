@@ -150,7 +150,11 @@ fun HomeScreen(vm: MainVm, pls: List<Playlist>, onOpen: (String) -> Unit, onPort
         },
         floatingActionButton = {
             Box {
-                ExtendedFloatingActionButton({ menu = true }, icon = { Icon(Icons.Default.Add, null) }, text = { Text("Add") })
+                ExtendedFloatingActionButton(onClick = { menu = true }) {
+                    Icon(Icons.Default.Add, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Add")
+                }
                 DropdownMenu(menu, { menu = false }) {
                     DropdownMenuItem(text = { Text("From URL") }, onClick = { menu = false; urlDlg = true })
                     DropdownMenuItem(text = { Text("From file") }, onClick = { menu = false; picker.launch(arrayOf("*/*")) })
@@ -348,38 +352,4 @@ fun EditorScreen(vm: MainVm, pl: Playlist, onPlay: (List<Channel>, Int) -> Unit,
                         OutlinedTextField(u, { u = it }, label = { Text("URL") })
                     }
                 },
-                confirmButton = { TextButton({ edit = null; setChannels { l -> l.mapIndexed { k, x -> if (k == i) x.copy(name = n, group = g, url = u, status = 0) else x } } }) { Text("Save") } },
-                dismissButton = { TextButton({ edit = null }) { Text("Cancel") } })
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun PortalScreen(vm: MainVm, onBack: () -> Unit) {
-    val init = remember { vm.portalCfg() }
-    var url by remember { mutableStateOf(init.url) }
-    var mac by remember { mutableStateOf(init.mac) }
-    var d1 by remember { mutableStateOf(init.deviceId) }
-    var d2 by remember { mutableStateOf(init.deviceId2) }
-    var sn by remember { mutableStateOf(init.serial) }
-    val macOk = Regex("^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$").matches(mac.trim())
-
-    Scaffold(topBar = {
-        TopAppBar(title = { Text("MAC portal login") },
-            navigationIcon = { IconButton(onBack) { Icon(Icons.Default.ArrowBack, "Back") } })
-    }) { pad ->
-        Column(Modifier.padding(pad).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutlinedTextField(url, { url = it }, Modifier.fillMaxWidth(), label = { Text("Portal URL") }, singleLine = true)
-            OutlinedTextField(mac, { mac = it.uppercase() }, Modifier.fillMaxWidth(), label = { Text("MAC address") },
-                placeholder = { Text("00:1A:79:XX:XX:XX") }, singleLine = true, isError = mac.isNotEmpty() && !macOk)
-            OutlinedTextField(d1, { d1 = it }, Modifier.fillMaxWidth(), label = { Text("Device ID 1") }, singleLine = true)
-            OutlinedTextField(d2, { d2 = it }, Modifier.fillMaxWidth(), label = { Text("Device ID 2") }, singleLine = true)
-            OutlinedTextField(sn, { sn = it }, Modifier.fillMaxWidth(), label = { Text("Serial number") }, singleLine = true)
-            Button(
-                onClick = { vm.portalLogin(PortalCfg(url.trim(), mac.trim(), d1.trim(), d2.trim(), sn.trim()), onBack) },
-                enabled = url.isNotBlank() && macOk, modifier = Modifier.fillMaxWidth().height(52.dp)
-            ) { Text("Login & import channels") }
-        }
-    }
-}
+                confirmButton = { TextButton({ edit = null; setChannels { l -> l.mapIndexed { k, x -> if (k == i) x.copy(name = n, group = g, url = u, status = 0) else x } } }) { Te
