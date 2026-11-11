@@ -17,6 +17,9 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     val deepCheck = MutableStateFlow(store.deepCheck)
     val epg = MutableStateFlow<Map<String, EpgData>>(emptyMap())
     val epgBusy = MutableStateFlow(false)
+    val recents = MutableStateFlow(store.loadRecents())
+    val buffer = MutableStateFlow(store.buffer)
+    val recents = MutableStateFlow(store.recents)
 
     init { autoCheck(); playlists.value.forEach { if (hasGuide(it)) loadEpg(it.id) } }
 
@@ -90,6 +93,18 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun xtreamLogin(server: String, user: String, pass: String) {
+        viewModelScope.launch {
+            busy.value = "Logging in to Xtream…"
+            try {
+                val (ch, epgUrl) = Xtream.login(server, user, pass)
+                if (ch.isEmpty()) error("No channels returned")
+                add("Xtream: " + server.substringAfter("://").substringBefore("/"), "xtream:$server", ch, epgUrl)
+            } catch (e: Exception) { message.value = "Xtream failed: ${e.message}" }
+            finally { busy.value = null }
+        }
+    }
+
     // ---- Guide (EPG)
     fun loadEpg(id: String, force: Boolean = false) {
         viewModelScope.launch {
@@ -112,6 +127,41 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     fun progs(c: Channel): List<Prog> {
         for (d in epg.value.values) { val l = d.forChannel(c); if (l.isNotEmpty()) return l }
         return emptyList()
+    }
+
+    // ---- Library tools
+    fun merge(ids: List<String>, name: String, dedupe: Boolean) {
+        val src = playlists.value.filter { it.id in ids }
+        var ch = src.flatMap { it.channels }
+        if (dedupe) ch = ch.distinctBy { it.url }
+        if (ch.isEmpty()) return
+        add(name.ifBlank { "Merged" }, "merged", ch, src.map { it.epgUrl }.firstOrNull { it.isNotBlank() } ?: "")
+        message.value = "Merged ${ch.size} channels"
+    }
+
+    fun copyTo(targetId: String, chs: List<Channel>) {
+        update(targetId) { p -> p.copy(channels = (p.channels + chs).distinctBy { it.url }) }
+        message.value = "Copied ${chs.size} channel(s)"
+    }
+
+    fun cycleBuffer() { val v = (buffer.value + 1) % 3; store.buffer = v; buffer.value = v }
+
+    fun played(url: String) {
+        val l = (listOf(url) + recents.value.filter { it != url }).take(12)
+        recents.value = l; store.recents = l
+    }
+
+    fun played(c: Channel) {
+        val l = (listOf(c) + recents.value.filter { it.url != c.url }).take(20)
+        recents.value = l
+        viewModelScope.launch(Dispatchers.IO) { store.saveRecents(l) }
+    }
+
+    /** Channel logo: playlist logo first, otherwise the icon from the guide (XMLTV). */
+    fun logo(c: Channel): String {
+        if (c.logo.startsWith("http")) return c.logo
+        for (d in epg.value.values) { val l = d.logoFor(c); if (l.isNotEmpty()) return l }
+        return ""
     }
 
     // ---- Playback / favorites

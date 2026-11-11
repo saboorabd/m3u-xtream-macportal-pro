@@ -63,3 +63,28 @@ fun PortalScreen(vm: MainVm, onBack: () -> Unit) {
         }
     }
 }
+
+
+@Composable
+fun XtreamDialog(vm: MainVm, onDismiss: () -> Unit) {
+    var s by remember { mutableStateOf("") }
+    var u by remember { mutableStateOf("") }
+    var p by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Xtream Codes login") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(s, { s = it }, label = { Text("Server URL") }, singleLine = true)
+                OutlinedTextField(u, { u = it }, label = { Text("Username") }, singleLine = true)
+                OutlinedTextField(p, { p = it }, label = { Text("Password") }, singleLine = true,
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation())
+            }
+        },
+        confirmButton = {
+            TextButton({ onDismiss(); vm.xtreamLogin(s.trim(), u.trim(), p.trim()) },
+                enabled = s.isNotBlank() && u.isNotBlank() && p.isNotBlank()) { Text("Login") }
+        },
+        dismissButton = { TextButton(onDismiss) { Text("Cancel") } }
+    )
+}

@@ -5,6 +5,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
@@ -140,4 +141,43 @@ object Stalker {
         }
         EpgData(map, emptyMap())
     }
+}
+
+/** Xtream Codes API client (live channels + XMLTV guide). */
+object Xtream {
+    private fun base(s: String): String {
+        var b = s.trim().trimEnd('/')
+        if (!b.startsWith("http", true)) b = "http://$b"
+        b = b.substringBefore("/player_api.php").substringBefore("/get.php").substringBefore("/xmltv.php")
+        return b.trimEnd('/')
+    }
+
+    suspend fun login(server: String, user: String, pass: String): Pair<List<Channel>, String> =
+        withContext(Dispatchers.IO) {
+            val b = base(server)
+            val u = URLEncoder.encode(user, "UTF-8")
+            val p = URLEncoder.encode(pass, "UTF-8")
+            val api = "$b/player_api.php?username=$u&password=$p"
+            val info = JSONObject(Net.get(api))
+            val ui = info.optJSONObject("user_info") ?: error("Invalid server response")
+            if (ui.optString("auth") != "1") error("Login rejected (check username/password)")
+            val cats = HashMap<String, String>()
+            val ca = JSONArray(Net.get("$api&action=get_live_categories"))
+            for (i in 0 until ca.length()) {
+                val o = ca.getJSONObject(i)
+                cats[o.optString("category_id")] = o.optString("category_name")
+            }
+            val sa = JSONArray(Net.get("$api&action=get_live_streams"))
+            val list = (0 until sa.length()).map {
+                val o = sa.getJSONObject(it)
+                Channel(
+                    name = o.optString("name"),
+                    url = "$b/live/$user/$pass/${o.optString("stream_id")}.m3u8",
+                    group = cats[o.optString("category_id")] ?: "",
+                    logo = o.optString("stream_icon"),
+                    tvgId = o.optString("epg_channel_id")
+                )
+            }
+            list to "$b/xmltv.php?username=$u&password=$p"
+        }
 }

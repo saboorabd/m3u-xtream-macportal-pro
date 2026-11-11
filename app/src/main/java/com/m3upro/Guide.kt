@@ -1,7 +1,9 @@
 package com.m3upro
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -17,11 +19,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.platform.LocalDensity
+import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -34,7 +39,7 @@ private const val HALF = 30 * 60_000L
 private const val HOUR = 60 * 60_000L
 private fun span(ms: Long): Dp = (ms / 60_000f * DPM).dp
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun GuideScreen(vm: MainVm, pls: List<Playlist>, onPlay: (List<Channel>, Int) -> Unit) {
     val epgMap by vm.epg.collectAsState()
@@ -62,7 +67,7 @@ fun GuideScreen(vm: MainVm, pls: List<Playlist>, onPlay: (List<Channel>, Int) ->
     }
 
     Scaffold(topBar = {
-        TopAppBar(title = { Text("Guide", fontWeight = FontWeight.Bold) }, actions = {
+        TopAppBar(title = { Text("TV Guide", fontWeight = FontWeight.Bold) }, actions = {
             TextButton({ jumpNow(true) }) { Text("Now") }
             IconButton({ pl?.let { vm.loadEpg(it.id, true) } }) { Icon(Icons.Default.Refresh, "Reload guide") }
             IconButton({ epgDlg = true }) { Icon(Icons.Default.Settings, "Guide source") }
@@ -110,38 +115,52 @@ fun GuideScreen(vm: MainVm, pls: List<Playlist>, onPlay: (List<Channel>, Int) ->
             }
             LazyColumn(Modifier.fillMaxSize()) {
                 itemsIndexed(rows, key = { i, c -> "$i${c.url}" }) { i, c ->
-                    Row(Modifier.height(64.dp)) {
+                    val logo = remember(c, epgMap) { vm.logo(c) }
+                    Row(Modifier.height(68.dp)) {
                         Row(Modifier.width(112.dp).fillMaxHeight().clickable { onPlay(rows, i) }.padding(8.dp),
                             verticalAlignment = Alignment.CenterVertically) {
-                            Logo(c, 32); Spacer(Modifier.width(6.dp))
+                            Logo(c, 32, logo); Spacer(Modifier.width(6.dp))
                             Text(c.name, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelMedium)
                         }
                         Row(Modifier.horizontalScroll(scroll)) {
                             val progs = data?.forChannel(c).orEmpty().filter { it.stop > winStart && it.start < winEnd }
-                            if (progs.isEmpty()) {
-                                Box(Modifier.width(span(winEnd - winStart)).fillMaxHeight().padding(8.dp), contentAlignment = Alignment.CenterStart) {
-                                    Text("No guide data", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            } else {
-                                var cursor = winStart
-                                progs.forEach { p ->
-                                    val s = max(p.start, cursor); val e = min(p.stop, winEnd)
-                                    if (e <= s) return@forEach
-                                    if (s > cursor) Spacer(Modifier.width(span(s - cursor)))
-                                    val live = now >= p.start && now < p.stop
-                                    Box(
-                                        Modifier.width(span(e - s)).fillMaxHeight().padding(2.dp).clip(RoundedCornerShape(10.dp))
-                                            .background(if (live) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant)
-                                            .clickable { detail = c to p }.padding(8.dp)
-                                    ) {
-                                        Column {
-                                            Text(p.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold,
-                                                style = MaterialTheme.typography.bodySmall)
-                                            Text("${hm(p.start)} – ${hm(p.stop)}", maxLines = 1, style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Box(Modifier.width(span(winEnd - winStart)).fillMaxHeight()) {
+                                if (progs.isEmpty()) {
+                                    Box(Modifier.fillMaxSize().padding(8.dp).clickable { onPlay(rows, i) }, contentAlignment = Alignment.CenterStart) {
+                                        Text("No guide data • tap to watch", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                } else {
+                                    Row {
+                                        var cursor = winStart
+                                        progs.forEach { p ->
+                                            val s = max(p.start, cursor); val e = min(p.stop, winEnd)
+                                            if (e <= s) return@forEach
+                                            if (s > cursor) Spacer(Modifier.width(span(s - cursor)))
+                                            val live = now >= p.start && now < p.stop
+                                            Row(
+                                                Modifier.width(span(e - s)).fillMaxHeight().padding(2.dp).clip(RoundedCornerShape(12.dp))
+                                                    .background(if (live) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant)
+                                                    .combinedClickable(onClick = { onPlay(rows, i) }, onLongClick = { detail = c to p })
+                                                    .padding(6.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                if (p.img.startsWith("http") && e - s >= 40 * 60_000L) {
+                                                    AsyncImage(p.img, null, Modifier.size(52.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
+                                                    Spacer(Modifier.width(8.dp))
+                                                }
+                                                Column {
+                                                    Text(p.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold,
+                                                        style = MaterialTheme.typography.bodySmall)
+                                                    Text("${hm(p.start)} – ${hm(p.stop)}", maxLines = 1, style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                }
+                                            }
+                                            cursor = e
                                         }
                                     }
-                                    cursor = e
+                                }
+                                if (now in winStart..winEnd) {
+                                    Box(Modifier.offset(x = span(now - winStart)).width(2.dp).fillMaxHeight().background(Color(0xFFFF4D4D)))
                                 }
                             }
                         }
@@ -155,11 +174,13 @@ fun GuideScreen(vm: MainVm, pls: List<Playlist>, onPlay: (List<Channel>, Int) ->
             AlertDialog(onDismissRequest = { detail = null }, title = { Text(p.title) },
                 text = {
                     Column {
-                        Text("${c.name} • ${hm(p.start)} – ${hm(p.stop)}", style = MaterialTheme.typography.labelLarge)
+                        if (p.img.startsWith("http")) AsyncImage(p.img, null,
+                            Modifier.fillMaxWidth().height(160.dp).clip(RoundedCornerShape(12.dp)), contentScale = ContentScale.Crop)
+                        Text("${c.name} • ${hm(p.start)} – ${hm(p.stop)}", Modifier.padding(top = 8.dp), style = MaterialTheme.typography.labelLarge)
                         if (p.desc.isNotBlank()) Text(p.desc, Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodyMedium)
                     }
                 },
-                confirmButton = { TextButton({ detail = null; onPlay(rows, rows.indexOf(c).coerceAtLeast(0)) }) { Text("Watch channel") } },
+                confirmButton = { TextButton({ detail = null; onPlay(rows, rows.indexOf(c).coerceAtLeast(0)) }) { Text("Watch") } },
                 dismissButton = { TextButton({ detail = null }) { Text("Close") } })
         }
         if (epgDlg) {
@@ -170,6 +191,11 @@ fun GuideScreen(vm: MainVm, pls: List<Playlist>, onPlay: (List<Channel>, Int) ->
                         if (pl.source.startsWith("portal:")) Text("This is a portal playlist; its guide is fetched from the portal automatically.",
                             style = MaterialTheme.typography.bodySmall)
                         OutlinedTextField(u, { u = it }, label = { Text("EPG URL (.xml or .xml.gz)") })
+                        Text("Community guides (examples):", Modifier.padding(top = 10.dp), style = MaterialTheme.typography.labelMedium)
+                        TextButton({ u = "https://epgshare01.online/epgshare01/epg_ripper_UK1.xml.gz" }) { Text("epgshare01 • UK") }
+                        TextButton({ u = "https://epgshare01.online/epgshare01/epg_ripper_PLEX1.xml.gz" }) { Text("epgshare01 • Plex") }
+                        Text("Other countries use the same file pattern (epg_ripper_XX1.xml.gz); availability depends on the community host.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 },
                 confirmButton = { TextButton({ epgDlg = false; vm.setEpgUrl(pl.id, u) }) { Text("Save & load") } },

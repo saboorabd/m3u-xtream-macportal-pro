@@ -56,14 +56,14 @@ fun Dot(s: Int) {
 }
 
 @Composable
-fun Logo(c: Channel, size: Int) {
+fun Logo(c: Channel, size: Int, url: String = c.logo) {
     Box(
         Modifier.size(size.dp).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.surfaceContainerHighest),
         contentAlignment = Alignment.Center
     ) {
         Text(c.name.trim().take(1).uppercase(), fontWeight = FontWeight.Bold, fontSize = (size / 2.4).sp,
             color = MaterialTheme.colorScheme.primary)
-        if (c.logo.startsWith("http")) AsyncImage(c.logo, null, Modifier.fillMaxSize().padding(3.dp), contentScale = ContentScale.Fit)
+        if (url.startsWith("http")) AsyncImage(url, null, Modifier.fillMaxSize().padding(3.dp), contentScale = ContentScale.Fit)
     }
 }
 
@@ -75,7 +75,7 @@ fun App(vm: MainVm) {
     val busy by vm.busy.collectAsState()
     val prog by vm.progress.collectAsState()
     val msg by vm.message.collectAsState()
-    var tab by rememberSaveable { mutableIntStateOf(0) }
+    var tab by rememberSaveable { mutableIntStateOf(if (vm.playlists.value.isEmpty()) 3 else 0) }
     var openId by remember { mutableStateOf<String?>(null) }
     var portal by remember { mutableStateOf(false) }
     var play by remember { mutableStateOf<PlayReq?>(null) }
@@ -95,16 +95,18 @@ fun App(vm: MainVm) {
             open != null -> EditorScreen(vm, open, onPlay) { openId = null }
             else -> Scaffold(bottomBar = {
                 NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainer) {
-                    NavigationBarItem(tab == 0, { tab = 0 }, { Icon(Icons.Default.Home, null) }, label = { Text("Library") })
+                    NavigationBarItem(tab == 0, { tab = 0 }, { Icon(Icons.Default.PlayArrow, null) }, label = { Text("Live") })
                     NavigationBarItem(tab == 1, { tab = 1 }, { Icon(Icons.Default.DateRange, null) }, label = { Text("Guide") })
                     NavigationBarItem(tab == 2, { tab = 2 }, { Icon(Icons.Default.Favorite, null) }, label = { Text("Favorites") })
+                    NavigationBarItem(tab == 3, { tab = 3 }, { Icon(Icons.Default.Home, null) }, label = { Text("Library") })
                 }
             }) { pad ->
                 Box(Modifier.padding(pad)) {
                     when (tab) {
-                        0 -> HomeScreen(vm, pls, { openId = it }, { portal = true })
+                        0 -> LiveScreen(vm, pls, onPlay)
                         1 -> GuideScreen(vm, pls, onPlay)
-                        else -> FavoritesScreen(vm, pls, onPlay)
+                        2 -> FavoritesScreen(vm, pls, onPlay)
+                        else -> HomeScreen(vm, pls, { openId = it }, { portal = true })
                     }
                 }
             }
@@ -129,6 +131,7 @@ fun HomeScreen(vm: MainVm, pls: List<Playlist>, onOpen: (String) -> Unit, onPort
     var menu by remember { mutableStateOf(false) }
     var more by remember { mutableStateOf(false) }
     var urlDlg by remember { mutableStateOf(false) }
+    var xtreamDlg by remember { mutableStateOf(false) }
     var del by remember { mutableStateOf<Playlist?>(null) }
     val deep by vm.deepCheck.collectAsState()
     val guide by vm.epg.collectAsState()
@@ -158,6 +161,7 @@ fun HomeScreen(vm: MainVm, pls: List<Playlist>, onOpen: (String) -> Unit, onPort
                 DropdownMenu(menu, { menu = false }) {
                     DropdownMenuItem(text = { Text("From URL") }, onClick = { menu = false; urlDlg = true })
                     DropdownMenuItem(text = { Text("From file") }, onClick = { menu = false; picker.launch(arrayOf("*/*")) })
+                    DropdownMenuItem(text = { Text("Xtream Codes login") }, onClick = { menu = false; xtreamDlg = true })
                     DropdownMenuItem(text = { Text("MAC portal login") }, onClick = { menu = false; onPortal() })
                 }
             }
@@ -170,7 +174,7 @@ fun HomeScreen(vm: MainVm, pls: List<Playlist>, onOpen: (String) -> Unit, onPort
                     Text("📺", fontSize = 48.sp)
                     Spacer(Modifier.height(8.dp))
                     Text("No playlists yet", style = MaterialTheme.typography.titleMedium)
-                    Text("Add from URL, file, or MAC portal.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Add from URL, file, Xtream or MAC portal.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             items(pls, key = { it.id }) { p ->
@@ -196,6 +200,7 @@ fun HomeScreen(vm: MainVm, pls: List<Playlist>, onOpen: (String) -> Unit, onPort
         }
     }
 
+    if (xtreamDlg) XtreamDialog(vm) { xtreamDlg = false }
     if (urlDlg) {
         var name by remember { mutableStateOf("") }
         var url by remember { mutableStateOf("") }
