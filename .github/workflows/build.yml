@@ -11,6 +11,17 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      - name: Apply update.zip (if present)
+        run: |
+          if [ -f update.zip ]; then
+            unzip -o update.zip
+            rm -f update.zip M3u.kt MainVm.kt Model.kt Net.kt Portal.kt Store.kt Ui.kt
+            git config user.name "github-actions"
+            git config user.email "actions@github.com"
+            git add -A
+            git commit -m "Apply update.zip" || true
+            git push || true
+          fi
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
