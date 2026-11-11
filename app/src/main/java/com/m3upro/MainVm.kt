@@ -15,10 +15,9 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     val progress = MutableStateFlow(-1f)
     val message = MutableStateFlow<String?>(null)
     val deepCheck = MutableStateFlow(store.deepCheck)
-    val epg = MutableStateFlow>(emptyMap())
+    val epg = MutableStateFlow<Map<String, EpgData>>(emptyMap())
     val epgBusy = MutableStateFlow(false)
     val recents = MutableStateFlow(store.loadRecents())
-    val buffer = MutableStateFlow(store.buffer)
 
     init { autoCheck(); playlists.value.forEach { if (hasGuide(it)) loadEpg(it.id) } }
 
@@ -142,8 +141,6 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         update(targetId) { p -> p.copy(channels = (p.channels + chs).distinctBy { it.url }) }
         message.value = "Copied ${chs.size} channel(s)"
     }
-
-    fun cycleBuffer() { val v = (buffer.value + 1) % 3; store.buffer = v; buffer.value = v }
 
     fun played(c: Channel) {
         val l = (listOf(c) + recents.value.filter { it.url != c.url }).take(20)
