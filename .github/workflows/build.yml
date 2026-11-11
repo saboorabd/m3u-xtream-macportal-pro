@@ -11,17 +11,19 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Apply update.zip (if present)
+      - name: Apply update.zip and repair project layout
         run: |
           if [ -f update.zip ]; then
             unzip -o update.zip
-            rm -f update.zip M3u.kt MainVm.kt Model.kt Net.kt Portal.kt Store.kt Ui.kt
-            git config user.name "github-actions"
-            git config user.email "actions@github.com"
-            git add -A
-            git commit -m "Apply update.zip" || true
-            git push || true
+            rm -f update.zip
           fi
+          rm -f M3u.kt MainVm.kt Model.kt Net.kt Portal.kt Store.kt Ui.kt
+          printf '%s\n' 'plugins {' '    id("com.android.application") version "8.5.2" apply false' '    id("org.jetbrains.kotlin.android") version "1.9.24" apply false' '}' > build.gradle.kts
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add -A
+          git commit -m "Repair project layout" || true
+          git push || true
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
