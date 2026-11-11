@@ -1,16 +1,9 @@
 # M3U Pro
-Free, ad-free IPTV playlist manager with TV guide and built-in player. Original code.
+Free, ad-free IPTV player + playlist manager. Original code, no ads, no billing.
 
-## Features
-- Import from URL / file / opening an .m3u; MAC portal (Stalker) login:
-  URL, MAC, Device ID 1, Device ID 2, Serial number
-- Auto-check of all URL playlists on every app launch (optional deep channel check)
-- **TV Guide**: scrollable timeline grid (XMLTV or portal EPG), live program highlighted, program details
-- **Player** (Media3/ExoPlayer, HLS/TS): swipe up/down to change channel, channel panel with now-playing,
-  now/next + progress, aspect Fit/Fill/Zoom, rotate, favorite, auto-hide controls, immersive mode
-- Favorites tab with live now-playing cards
-- Editor: search, groups, rename, bulk delete, sort, dedupe, dead-link checker, export .m3u
-
-## Build APK on GitHub
-Push to `main` -> Actions "Build APK" -> download APK from Artifacts.
-Tag `v1.0` -> APK attached to a Release.
+Sources: M3U URL / file, Xtream Codes, MAC portal (Stalker: URL, MAC, Device ID 1/2, Serial)
+Player: HLS / DASH / TS, ClearKey (multi-key) / Widevine / PlayReady, custom User-Agent & Referer,
+        audio / subtitle / quality picker, PiP, sleep timer, brightness / volume / channel swipe gestures
+Guide: XMLTV timeline with program images, now-line, tap to play, long-press for details
+Live tab: all channels, groups, search, continue watching, favorites
+Library: auto-check on launch, dead-link checker, dedupe, rename, regroup, export
