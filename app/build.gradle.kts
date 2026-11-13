@@ -9,8 +9,8 @@ android {
         applicationId = "com.m3upro"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "2.0"
     }
     buildTypes { release { isMinifyEnabled = false } }
     compileOptions {
@@ -31,11 +31,5 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
-    implementation("androidx.media3:media3-exoplayer:1.3.1")
-    implementation("androidx.media3:media3-exoplayer-hls:1.3.1")
-    implementation("androidx.media3:media3-exoplayer-dash:1.3.1")
-    implementation("androidx.media3:media3-exoplayer-rtsp:1.3.1")
-    implementation("androidx.media3:media3-datasource-rtmp:1.3.1")
-    implementation("androidx.media3:media3-ui:1.3.1")
     implementation("io.coil-kt:coil-compose:2.6.0")
 }
