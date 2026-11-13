@@ -181,3 +181,43 @@ object Xtream {
             list to "$b/xmltv.php?username=$u&password=$p"
         }
 }
+
+data class Sniffed(val mime: String?, val error: String?)
+
+/** Peeks at the first bytes of a stream so the player knows if it is HLS, DASH or MPEG-TS (or not a stream at all). */
+object Sniff {
+    suspend fun detect(url: String, ua: String, ref: String): Sniffed = withContext(Dispatchers.IO) {
+        if (!url.startsWith("http", true)) return@withContext Sniffed(null, null)
+        try {
+            val rb = Request.Builder().url(url).header("User-Agent", ua.ifBlank { "VLC/3.0.18 LibVLC/3.0.18" })
+            if (ref.isNotBlank()) rb.header("Referer", ref)
+            Net.client.newCall(rb.build()).execute().use { r ->
+                if (!r.isSuccessful) return@withContext Sniffed(null, "Server replied HTTP ${r.code} (link expired, blocked or wrong login?)")
+                val ct = (r.header("Content-Type") ?: "").lowercase()
+                val buf = ByteArray(2048)
+                var n = 0
+                val ins = r.body!!.byteStream()
+                while (n < buf.size) {
+                    val k = ins.read(buf, n, buf.size - n)
+                    if (k <= 0) break
+                    n += k
+                }
+                val head = String(buf, 0, n, Charsets.ISO_8859_1).trimStart()
+                when {
+                    head.startsWith("#EXTM3U") || ct.contains("mpegurl") -> Sniffed("application/x-mpegURL", null)
+                    head.contains("<MPD") || ct.contains("dash+xml") -> Sniffed("application/dash+xml", null)
+                    n > 188 && buf[0] == 0x47.toByte() && buf[188] == 0x47.toByte() -> Sniffed("video/mp2t", null)
+                    head.startsWith("<!DOCTYPE html", true) || head.startsWith("<html", true) ->
+                        Sniffed(null, "Server returned a web page, not a video stream")
+                    else -> Sniffed(null, null)
+                }
+            }
+        } catch (e: Exception) { Sniffed(null, null) }
+    }
+}
+
+/** Hides usernames / passwords / tokens so diagnostics can be shared safely. */
+fun maskUrl(u: String): String =
+    u.replace(Regex("(?i)/live/[^/]+/[^/]+/"), "/live/***/***/")
+        .replace(Regex("(?i)(password|pass|token|username|user|mac|key)=([^&]+)"), "\$1=***")
+        .take(150)

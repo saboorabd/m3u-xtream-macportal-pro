@@ -2,6 +2,8 @@ package com.m3upro
 
 import android.app.Activity
 import android.app.PictureInPictureParams
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
@@ -76,6 +78,8 @@ fun PlayerScreen(vm: MainVm, channels: List<Channel>, start: Int, onClose: () ->
     var sleepAt by remember { mutableLongStateOf(0L) }
     var osd by remember { mutableStateOf<String?>(null) }
     var vol by remember { mutableFloatStateOf(audio.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat()) }
+    val tried = remember { mutableStateMapOf<Int, Int>() }
+    var info by remember { mutableStateOf("") }
     val favs = remember { mutableStateMapOf<String, Boolean>().apply { channels.forEach { put(it.url, it.fav) } } }
     val guide by vm.epg.collectAsState()
     val now by produceState(System.currentTimeMillis()) { while (true) { delay(15_000); value = System.currentTimeMillis() } }
@@ -91,7 +95,14 @@ fun PlayerScreen(vm: MainVm, channels: List<Channel>, start: Int, onClose: () ->
         val l = object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) { buffering = state == Player.STATE_BUFFERING }
             override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying }
-            override fun onPlayerError(error: PlaybackException) { err = error.errorCodeName; buffering = false }
+            override fun onPlayerError(error: PlaybackException) {
+                val a = tried[idx] ?: 0
+                if (error.errorCode in 3000..3999 && a < 3) { tried[idx] = a + 1; retry++ }
+                else {
+                    err = error.errorCodeName.removePrefix("ERROR_CODE_") + (error.cause?.message?.let { " • " + it.take(80) } ?: "")
+                    buffering = false
+                }
+            }
         }
         exo.addListener(l)
         val w = activity?.window
@@ -110,7 +121,20 @@ fun PlayerScreen(vm: MainVm, channels: List<Channel>, start: Int, onClose: () ->
         vm.played(ch)
         try {
             val u = vm.resolve(ch.url)
-            exo.setMediaSource(Drm.source(ctx, ch, u))
+            val attempt = tried[idx] ?: 0
+            if (u.contains("youtube.com", true) || u.contains("youtu.be", true)) {
+                err = "YouTube links can't be played here (no direct stream URL)"; buffering = false; return@LaunchedEffect
+            }
+            val sniff = if (attempt == 0) Sniff.detect(u, ch.ua, ch.ref) else Sniffed(null, null)
+            info = "URL: ${maskUrl(u)}\nDetected: ${sniff.mime ?: "unknown"} • attempt $attempt\nDRM: ${ch.drm.ifBlank { "none" }}"
+            if (sniff.error != null) { err = sniff.error; buffering = false; return@LaunchedEffect }
+            val mime: String? = when (attempt) {
+                0 -> sniff.mime
+                1 -> "application/x-mpegURL"
+                2 -> "video/mp2t"
+                else -> "application/dash+xml"
+            }
+            exo.setMediaSource(Drm.source(ctx, ch, u, mime))
             exo.prepare()
             exo.playWhenReady = true
         } catch (e: Exception) { err = e.message ?: "Could not open stream"; buffering = false }
@@ -183,10 +207,17 @@ fun PlayerScreen(vm: MainVm, channels: List<Channel>, start: Int, onClose: () ->
                 horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("Can't play this stream", color = Color.White, fontWeight = FontWeight.Bold)
                 Text(e, color = Color(0xFFB0B7C3), style = MaterialTheme.typography.bodySmall)
+                if (info.isNotBlank()) Text(info, Modifier.padding(top = 8.dp), color = Color(0xFF8A93A3),
+                    style = MaterialTheme.typography.labelSmall)
                 Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button({ retry++ }) { Text("Retry") }
-                    OutlinedButton({ go(1) }) { Text("Next channel") }
+                    Button({ tried[idx] = 0; retry++ }) { Text("Retry") }
+                    OutlinedButton({ go(1) }) { Text("Next") }
+                    OutlinedButton({
+                        val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        cm.setPrimaryClip(ClipData.newPlainText("stream-details", info + "\nError: " + e))
+                        osd = "Details copied"
+                    }) { Text("Copy") }
                 }
             }
         }
@@ -236,7 +267,12 @@ fun PlayerScreen(vm: MainVm, channels: List<Channel>, start: Int, onClose: () ->
                         .padding(16.dp)
                 ) {
                     if (cur != null) {
-                        Text("NOW  ${hm(cur.start)}–${hm(cur.stop)}  ${cur.title}", color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("NOW", Modifier.background(Color(0xFFF5B042), RoundedCornerShape(6.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
+                                color = Color(0xFF1A1205), fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelSmall)
+                            Spacer(Modifier.width(8.dp))
+                            Text("${cur.title}  ${hm(cur.start)}–${hm(cur.stop)}", color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
                         Spacer(Modifier.height(6.dp))
                         LinearProgressIndicator(
                             progress = { ((now - cur.start).toFloat() / (cur.stop - cur.start)).coerceIn(0f, 1f) },
@@ -265,7 +301,7 @@ fun PlayerScreen(vm: MainVm, channels: List<Channel>, start: Int, onClose: () ->
                     val p = vm.progs(c).firstOrNull { now >= it.start && now < it.stop }
                     Row(
                         Modifier.fillMaxWidth().clickable { idx = i; panel = false; poke++ }
-                            .background(if (i == idx) Color(0x337C9CFF) else Color.Transparent).padding(12.dp),
+                            .background(if (i == idx) Color(0x33F5B042) else Color.Transparent).padding(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text("${i + 1}", color = Color(0xFF6B7280), modifier = Modifier.width(34.dp))

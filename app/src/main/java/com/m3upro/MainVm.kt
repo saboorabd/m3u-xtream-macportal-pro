@@ -19,9 +19,34 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     val epgBusy = MutableStateFlow(false)
     val recents = MutableStateFlow(store.loadRecents())
 
-    init { autoCheck(); playlists.value.forEach { if (hasGuide(it)) loadEpg(it.id) } }
+    init { importBuiltin(); autoCheck(); playlists.value.forEach { if (hasGuide(it)) loadEpg(it.id) }; bootstrap() }
 
     private fun hasGuide(p: Playlist) = p.epgUrl.isNotBlank() || p.source.startsWith("portal:")
+
+    /** Imports app/src/main/assets/playlist.m3u (if you bundled one) the first time the app runs. */
+    private fun importBuiltin() {
+        viewModelScope.launch {
+            if (store.builtinDone) return@launch
+            try {
+                val text = withContext(Dispatchers.IO) {
+                    getApplication<Application>().assets.open("playlist.m3u").bufferedReader().use { it.readText() }
+                }
+                val ch = withContext(Dispatchers.Default) { M3u.parse(text) }
+                if (ch.isNotEmpty()) add("Built-in playlist", "builtin", ch, M3u.epgUrl(text))
+                store.builtinDone = true
+            } catch (e: Exception) { /* no bundled playlist */ }
+        }
+    }
+
+    fun mergeAll() {
+        val rest = playlists.value.filter { it.source != "merged" }
+        val all = rest.flatMap { it.channels }.distinctBy { it.url }
+        if (all.isEmpty()) { message.value = "Nothing to merge"; return }
+        playlists.value = rest + Playlist(UUID.randomUUID().toString(), "All channels (merged)", "merged",
+            System.currentTimeMillis(), 1, all)
+        persist()
+        message.value = "Merged ${all.size} channels"
+    }
 
     fun setDeep(v: Boolean) { store.deepCheck = v; deepCheck.value = v }
     fun portalCfg() = store.loadPortal()
@@ -44,7 +69,51 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         if (epgUrl.isNotBlank() || source.startsWith("portal:")) loadEpg(id)
     }
 
-    fun delete(id: String) { playlists.value = playlists.value.filter { it.id != id }; persist() }
+    fun delete(id: String) {
+        if (id == BUILTIN) store.builtinRemoved = true
+        playlists.value = playlists.value.filter { it.id != id }; persist()
+    }
+
+    // ---- Built-in playlist: bundled in the APK (assets/default.m3u) and refreshed from the GitHub repo
+    private fun bootstrap() {
+        viewModelScope.launch {
+            if (store.builtinRemoved) return@launch
+            if (playlists.value.none { it.id == BUILTIN }) {
+                val local = withContext(Dispatchers.IO) {
+                    try {
+                        getApplication<Application>().assets.open("default.m3u").bufferedReader().use { M3u.parse(it.readText()) }
+                    } catch (e: Exception) { emptyList<Channel>() }
+                }
+                if (local.isNotEmpty()) upsertBuiltin(local, "")
+            }
+            try {
+                val text = Net.get(BUILTIN_URL)
+                val ch = withContext(Dispatchers.Default) { M3u.parse(text) }
+                if (ch.isNotEmpty()) upsertBuiltin(ch, M3u.epgUrl(text))
+            } catch (e: Exception) { /* offline or repo playlist missing: keep what we have */ }
+        }
+    }
+
+    private fun upsertBuiltin(ch: List<Channel>, epgUrl: String) {
+        val old = playlists.value.firstOrNull { it.id == BUILTIN }
+        if (old == null) {
+            playlists.value = playlists.value +
+                Playlist(BUILTIN, "Tamil IPTV (built-in)", "builtin", System.currentTimeMillis(), 1, ch, epgUrl)
+            persist()
+            if (epgUrl.isNotBlank()) loadEpg(BUILTIN)
+        } else {
+            val favs = old.channels.filter { it.fav }.map { it.url }.toSet()
+            update(BUILTIN) {
+                it.copy(channels = ch.map { c -> c.copy(fav = c.url in favs) }, lastChecked = System.currentTimeMillis(),
+                    state = 1, epgUrl = epgUrl.ifBlank { it.epgUrl })
+            }
+        }
+    }
+
+    companion object {
+        const val BUILTIN = "builtin"
+        const val BUILTIN_URL = "https://raw.githubusercontent.com/saboorabd/Tamil-iptv-player/main/public/playlist.m3u"
+    }
 
     fun addFromUrl(name: String, url: String) {
         viewModelScope.launch {
@@ -171,8 +240,20 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             for (p in playlists.value) {
                 if (!p.source.startsWith("http")) continue
-                val ok = Net.reachable(p.source)
-                update(p.id) { it.copy(state = if (ok) 1 else 2, lastChecked = System.currentTimeMillis()) }
+                try {
+                    val text = Net.get(p.source)
+                    val fresh = withContext(Dispatchers.Default) { M3u.parse(text) }
+                    if (fresh.isNotEmpty()) {
+                        val favs = p.channels.filter { it.fav }.map { it.url }.toSet()
+                        val st = p.channels.associate { it.url to it.status }
+                        update(p.id) {
+                            it.copy(channels = fresh.map { c -> c.copy(fav = c.url in favs, status = st[c.url] ?: 0) },
+                                state = 1, lastChecked = System.currentTimeMillis())
+                        }
+                    } else update(p.id) { it.copy(state = 2, lastChecked = System.currentTimeMillis()) }
+                } catch (e: Exception) {
+                    update(p.id) { it.copy(state = 2, lastChecked = System.currentTimeMillis()) }
+                }
             }
             if (store.deepCheck) playlists.value.forEach { runCheck(it.id) }
         }

@@ -13,6 +13,14 @@ class Store(private val ctx: Context) {
         get() = prefs.getBoolean("deep", false)
         set(v) = prefs.edit().putBoolean("deep", v).apply()
 
+    var builtinRemoved: Boolean
+        get() = prefs.getBoolean("builtin_removed", false)
+        set(v) = prefs.edit().putBoolean("builtin_removed", v).apply()
+
+    var builtinDone: Boolean
+        get() = prefs.getBoolean("builtin_done", false)
+        set(v) = prefs.edit().putBoolean("builtin_done", v).apply()
+
     fun savePortal(c: PortalCfg) = prefs.edit()
         .putString("p_url", c.url).putString("p_mac", c.mac).putString("p_d1", c.deviceId)
         .putString("p_d2", c.deviceId2).putString("p_sn", c.serial).apply()

@@ -5,6 +5,7 @@ import android.util.Base64
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.drm.DefaultDrmSessionManager
 import androidx.media3.exoplayer.drm.FrameworkMediaDrm
@@ -34,7 +35,7 @@ object Drm {
         } catch (e: Exception) { null }
     }
 
-    fun source(ctx: Context, ch: Channel, url: String): MediaSource {
+    fun source(ctx: Context, ch: Channel, url: String, mime: String? = null): MediaSource {
         val headers = HashMap<String, String>()
         if (ch.ref.isNotBlank()) headers["Referer"] = ch.ref
         val http = DefaultHttpDataSource.Factory()
@@ -42,8 +43,9 @@ object Drm {
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(10_000).setReadTimeoutMs(15_000)
             .setDefaultRequestProperties(headers)
-        val factory = DefaultMediaSourceFactory(ctx).setDataSourceFactory(http)
+        val factory = DefaultMediaSourceFactory(ctx).setDataSourceFactory(DefaultDataSource.Factory(ctx, http))
         val item = MediaItem.Builder().setUri(url)
+        if (mime != null) item.setMimeType(mime)
         val type = ch.drm.lowercase()
         val key = ch.key.trim()
         if (type.contains("clearkey")) {

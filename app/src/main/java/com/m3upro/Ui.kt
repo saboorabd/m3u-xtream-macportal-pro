@@ -40,11 +40,13 @@ fun hm(t: Long): String = DateFormat.getTimeInstance(DateFormat.SHORT).format(Da
 fun AppTheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = darkColorScheme(
-            primary = Color(0xFF7C9CFF), onPrimary = Color(0xFF0B1020),
-            primaryContainer = Color(0xFF26356B), onPrimaryContainer = Color(0xFFDDE5FF),
-            secondary = Color(0xFF5EEAD4), background = Color(0xFF0E1116),
-            surface = Color(0xFF0E1116), surfaceVariant = Color(0xFF1A2029),
-            surfaceContainer = Color(0xFF141922), surfaceContainerHighest = Color(0xFF1F2630)
+            primary = Color(0xFFF5B042), onPrimary = Color(0xFF1A1205),
+            primaryContainer = Color(0xFF4A3410), onPrimaryContainer = Color(0xFFFFE2B0),
+            secondary = Color(0xFFFF7A3D), background = Color(0xFF05080F), onBackground = Color(0xFFF2F6FC),
+            surface = Color(0xFF05080F), onSurface = Color(0xFFF2F6FC),
+            surfaceVariant = Color(0xFF141F38), onSurfaceVariant = Color(0xFF8A9BB8),
+            surfaceContainer = Color(0xFF0F182C), surfaceContainerHighest = Color(0xFF1A2745),
+            outline = Color(0xFF3A4A6B)
         ), content = content
     )
 }
@@ -147,6 +149,7 @@ fun HomeScreen(vm: MainVm, pls: List<Playlist>, onOpen: (String) -> Unit, onPort
                     DropdownMenu(more, { more = false }) {
                         DropdownMenuItem(text = { Text("Deep-check channels on launch") },
                             trailingIcon = { Checkbox(deep, null) }, onClick = { vm.setDeep(!deep) })
+                        DropdownMenuItem(text = { Text("Merge all playlists into one") }, onClick = { more = false; vm.mergeAll() })
                     }
                 }
             })
