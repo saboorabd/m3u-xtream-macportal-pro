@@ -1,11 +1,17 @@
 package com.m3upro
 
 import android.app.Application
+import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import kotlinx.coroutines.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.util.UUID
 
 class MainVm(app: Application) : AndroidViewModel(app) {
@@ -14,46 +20,18 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     val busy = MutableStateFlow<String?>(null)
     val progress = MutableStateFlow(-1f)
     val message = MutableStateFlow<String?>(null)
-    val deepCheck = MutableStateFlow(store.deepCheck)
-    val epg = MutableStateFlow<Map<String, EpgData>>(emptyMap())
-    val epgBusy = MutableStateFlow(false)
-    val recents = MutableStateFlow(store.loadRecents())
+    val canUndo = MutableStateFlow<Set<String>>(emptySet())
+    val settings = MutableStateFlow(Settings(store.deepCheck, store.timeoutSec, store.concurrency))
 
-    init { importBuiltin(); autoCheck(); playlists.value.forEach { if (hasGuide(it)) loadEpg(it.id) }; bootstrap() }
+    private val undoStacks = HashMap<String, ArrayDeque<List<Channel>>>()
+    private val saveLock = Any()
+    private var job: Job? = null
 
-    private fun hasGuide(p: Playlist) = p.epgUrl.isNotBlank() || p.source.startsWith("portal:")
+    init { startupCheck() }
 
-    /** Imports app/src/main/assets/playlist.m3u (if you bundled one) the first time the app runs. */
-    private fun importBuiltin() {
-        viewModelScope.launch {
-            if (store.builtinDone) return@launch
-            try {
-                val text = withContext(Dispatchers.IO) {
-                    getApplication<Application>().assets.open("playlist.m3u").bufferedReader().use { it.readText() }
-                }
-                val ch = withContext(Dispatchers.Default) { M3u.parse(text) }
-                if (ch.isNotEmpty()) add("Built-in playlist", "builtin", ch, M3u.epgUrl(text))
-                store.builtinDone = true
-            } catch (e: Exception) { /* no bundled playlist */ }
-        }
-    }
-
-    fun mergeAll() {
-        val rest = playlists.value.filter { it.source != "merged" }
-        val all = rest.flatMap { it.channels }.distinctBy { it.url }
-        if (all.isEmpty()) { message.value = "Nothing to merge"; return }
-        playlists.value = rest + Playlist(UUID.randomUUID().toString(), "All channels (merged)", "merged",
-            System.currentTimeMillis(), 1, all)
-        persist()
-        message.value = "Merged ${all.size} channels"
-    }
-
-    fun setDeep(v: Boolean) { store.deepCheck = v; deepCheck.value = v }
-    fun portalCfg() = store.loadPortal()
-
+    // ------------------------------------------------------------ state helpers
     private fun persist() {
-        val snap = playlists.value
-        viewModelScope.launch(Dispatchers.IO) { store.save(snap) }
+        viewModelScope.launch(Dispatchers.IO) { synchronized(saveLock) { store.save(playlists.value) } }
     }
 
     fun update(id: String, f: (Playlist) -> Playlist) {
@@ -61,70 +39,80 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         persist()
     }
 
-    private fun add(name: String, source: String, ch: List<Channel>, epgUrl: String = "") {
+    private fun refreshUndoFlag() {
+        canUndo.value = undoStacks.filter { it.value.isNotEmpty() }.keys.toSet()
+    }
+
+    /** Every edit goes through here so it can be undone. */
+    fun edit(id: String, f: (List<Channel>) -> List<Channel>) {
+        val p = playlists.value.firstOrNull { it.id == id } ?: return
+        val st = undoStacks.getOrPut(id) { ArrayDeque() }
+        st.addLast(p.channels)
+        if (st.size > 30) st.removeFirst()
+        refreshUndoFlag()
+        update(id) { it.copy(channels = f(it.channels)) }
+    }
+
+    fun undo(id: String) {
+        val st = undoStacks[id] ?: return
+        if (st.isEmpty()) return
+        val prev = st.removeLast()
+        refreshUndoFlag()
+        update(id) { it.copy(channels = prev) }
+        message.value = "Undone"
+    }
+
+    private fun addPlaylist(name: String, kind: String, source: String, meta: String, ch: List<Channel>, info: String = ""): String {
         val id = UUID.randomUUID().toString()
         playlists.value = playlists.value +
-            Playlist(id, name, source, System.currentTimeMillis(), 1, ch, epgUrl)
+            Playlist(id, name, kind, source, meta, System.currentTimeMillis(), 1, ch, info)
         persist()
-        if (epgUrl.isNotBlank() || source.startsWith("portal:")) loadEpg(id)
+        return id
     }
 
     fun delete(id: String) {
-        if (id == BUILTIN) store.builtinRemoved = true
-        playlists.value = playlists.value.filter { it.id != id }; persist()
+        playlists.value = playlists.value.filter { it.id != id }
+        undoStacks.remove(id)
+        refreshUndoFlag()
+        persist()
     }
 
-    // ---- Built-in playlist: bundled in the APK (assets/default.m3u) and refreshed from the GitHub repo
-    private fun bootstrap() {
-        viewModelScope.launch {
-            if (store.builtinRemoved) return@launch
-            if (playlists.value.none { it.id == BUILTIN }) {
-                val local = withContext(Dispatchers.IO) {
-                    try {
-                        getApplication<Application>().assets.open("default.m3u").bufferedReader().use { M3u.parse(it.readText()) }
-                    } catch (e: Exception) { emptyList<Channel>() }
-                }
-                if (local.isNotEmpty()) upsertBuiltin(local, "")
-            }
-            try {
-                val text = Net.get(BUILTIN_URL)
-                val ch = withContext(Dispatchers.Default) { M3u.parse(text) }
-                if (ch.isNotEmpty()) upsertBuiltin(ch, M3u.epgUrl(text))
-            } catch (e: Exception) { /* offline or repo playlist missing: keep what we have */ }
-        }
+    fun rename(id: String, name: String) { if (name.isNotBlank()) update(id) { it.copy(name = name.trim()) } }
+
+    fun setSettings(s: Settings) {
+        store.deepCheck = s.deep; store.timeoutSec = s.timeout; store.concurrency = s.concurrency
+        settings.value = s
     }
 
-    private fun upsertBuiltin(ch: List<Channel>, epgUrl: String) {
-        val old = playlists.value.firstOrNull { it.id == BUILTIN }
-        if (old == null) {
-            playlists.value = playlists.value +
-                Playlist(BUILTIN, "Tamil IPTV (built-in)", "builtin", System.currentTimeMillis(), 1, ch, epgUrl)
-            persist()
-            if (epgUrl.isNotBlank()) loadEpg(BUILTIN)
-        } else {
-            val favs = old.channels.filter { it.fav }.map { it.url }.toSet()
-            update(BUILTIN) {
-                it.copy(channels = ch.map { c -> c.copy(fav = c.url in favs) }, lastChecked = System.currentTimeMillis(),
-                    state = 1, epgUrl = epgUrl.ifBlank { it.epgUrl })
-            }
-        }
+    private fun portalCfg(p: Playlist): PortalCfg {
+        val m = try { JSONObject(p.meta) } catch (e: Exception) { JSONObject() }
+        return PortalCfg(p.source, m.optString("mac"), m.optString("d1"), m.optString("d2"), m.optString("sn"))
     }
 
-    companion object {
-        const val BUILTIN = "builtin"
-        const val BUILTIN_URL = "https://raw.githubusercontent.com/saboorabd/Tamil-iptv-player/main/public/playlist.m3u"
-    }
-
+    // ------------------------------------------------------------ adding sources
     fun addFromUrl(name: String, url: String) {
         viewModelScope.launch {
-            busy.value = "Loading playlist…"
+            busy.value = "Downloading playlist…"
             try {
-                val (ch, e) = withContext(Dispatchers.Default) {
-                    val t = Net.get(url); M3u.parse(t) to M3u.epgUrl(t)
-                }
-                if (ch.isEmpty()) error("No channels found")
-                add(name.ifBlank { url.substringAfterLast('/').substringBefore('?').ifBlank { "Playlist" } }, url, ch, e)
-            } catch (e: Exception) { message.value = "Failed: ${e.message}" }
+                val ch = withContext(Dispatchers.Default) { M3u.parse(Net.get(url, true)) }
+                if (ch.isEmpty()) error("No channels found in this playlist")
+                val nm = name.ifBlank { url.substringAfterLast('/').substringBefore('?').substringBeforeLast('.').ifBlank { hostOf(url) } }
+                addPlaylist(nm, "m3u", url, "", ch)
+                message.value = "Added ${ch.size} channels"
+            } catch (e: Exception) { message.value = "Failed: ${Net.friendly(e)}" }
+            finally { busy.value = null }
+        }
+    }
+
+    fun addFromText(name: String, text: String) {
+        viewModelScope.launch {
+            busy.value = "Parsing…"
+            try {
+                val ch = withContext(Dispatchers.Default) { M3u.parse(text) }
+                if (ch.isEmpty()) error("No channels found in the text")
+                addPlaylist(name.ifBlank { "Pasted playlist" }, "text", "", "", ch)
+                message.value = "Added ${ch.size} channels"
+            } catch (e: Exception) { message.value = "Failed: ${Net.friendly(e)}" }
             finally { busy.value = null }
         }
     }
@@ -133,150 +121,192 @@ class MainVm(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             busy.value = "Reading file…"
             try {
-                val (ch, e) = withContext(Dispatchers.IO) {
+                val ch = withContext(Dispatchers.IO) {
                     val t = getApplication<Application>().contentResolver.openInputStream(uri)!!
                         .bufferedReader().use { it.readText() }
-                    M3u.parse(t) to M3u.epgUrl(t)
+                    M3u.parse(t)
                 }
-                if (ch.isEmpty()) error("No channels found")
-                add("Local playlist", "file", ch, e)
-            } catch (e: Exception) { message.value = "Failed: ${e.message}" }
+                if (ch.isEmpty()) error("No channels found in this file")
+                val nm = uri.lastPathSegment?.substringAfterLast('/')?.substringBeforeLast('.') ?: "Local playlist"
+                addPlaylist(nm.ifBlank { "Local playlist" }, "file", "", "", ch)
+                message.value = "Added ${ch.size} channels"
+            } catch (e: Exception) { message.value = "Failed: ${Net.friendly(e)}" }
             finally { busy.value = null }
         }
     }
 
-    fun portalLogin(cfg: PortalCfg, onDone: () -> Unit) {
-        viewModelScope.launch {
-            busy.value = "Logging in to portal…"
-            try {
-                store.savePortal(cfg)
-                val ch = Stalker.login(cfg)
-                if (ch.isEmpty()) error("No channels returned")
-                val host = cfg.url.substringAfter("://").substringBefore("/")
-                add("Portal: $host", "portal:${cfg.url}", ch)
-                onDone()
-            } catch (e: Exception) { message.value = "Login failed: ${e.message}" }
-            finally { busy.value = null }
-        }
-    }
-
-    fun xtreamLogin(server: String, user: String, pass: String) {
+    fun xtreamLogin(name: String, server: String, user: String, pass: String, ext: String, movies: Boolean) {
         viewModelScope.launch {
             busy.value = "Logging in to Xtream…"
             try {
-                val (ch, epgUrl) = Xtream.login(server, user, pass)
-                if (ch.isEmpty()) error("No channels returned")
-                add("Xtream: " + server.substringAfter("://").substringBefore("/"), "xtream:$server", ch, epgUrl)
-            } catch (e: Exception) { message.value = "Xtream failed: ${e.message}" }
+                val r = Xtream.fetch(server, user, pass, ext, movies)
+                if (r.channels.isEmpty()) error("No channels returned")
+                val meta = JSONObject().put("user", user).put("pass", pass).put("ext", ext).put("movies", movies).toString()
+                addPlaylist(name.ifBlank { "Xtream: " + hostOf(server) }, "xtream", server, meta, r.channels, r.info)
+                message.value = "Added ${r.channels.size} channels"
+            } catch (e: Exception) { message.value = "Xtream failed: ${Net.friendly(e)}" }
             finally { busy.value = null }
         }
     }
 
-    // ---- Guide (EPG)
-    fun loadEpg(id: String, force: Boolean = false) {
+    fun portalLogin(name: String, cfg: PortalCfg, onDone: () -> Unit) {
         viewModelScope.launch {
-            val p = playlists.value.firstOrNull { it.id == id } ?: return@launch
-            epgBusy.value = true
+            busy.value = "Logging in to portal…"
             try {
-                val d = when {
-                    p.source.startsWith("portal:") -> Stalker.epg(store.loadPortal())
-                    p.epgUrl.isNotBlank() -> Epg.load(p.epgUrl, getApplication<Application>().cacheDir, force)
-                    else -> null
-                }
-                if (d != null) epg.value = epg.value + (id to d)
-            } catch (e: Exception) { message.value = "Guide: ${e.message}" }
-            finally { epgBusy.value = false }
+                val r = Stalker.fetch(cfg)
+                val meta = JSONObject().put("mac", cfg.mac).put("d1", cfg.deviceId).put("d2", cfg.deviceId2).put("sn", cfg.serial).toString()
+                addPlaylist(name.ifBlank { "Portal: " + hostOf(cfg.url) }, "portal", cfg.url, meta, r.channels, r.info)
+                message.value = "Added ${r.channels.size} channels"
+                onDone()
+            } catch (e: Exception) { message.value = Net.friendly(e) }
+            finally { busy.value = null }
         }
     }
 
-    fun setEpgUrl(id: String, url: String) { update(id) { it.copy(epgUrl = url.trim()) }; loadEpg(id, true) }
-
-    fun progs(c: Channel): List<Prog> {
-        for (d in epg.value.values) { val l = d.forChannel(c); if (l.isNotEmpty()) return l }
-        return emptyList()
+    // ------------------------------------------------------------ refresh from source
+    private suspend fun fetchFor(p: Playlist): Fetched = when (p.kind) {
+        "m3u" -> Fetched(withContext(Dispatchers.Default) { M3u.parse(Net.get(p.source, true)) }, p.info)
+        "xtream" -> {
+            val m = try { JSONObject(p.meta) } catch (e: Exception) { JSONObject() }
+            Xtream.fetch(p.source, m.optString("user"), m.optString("pass"), m.optString("ext", "m3u8"), m.optBoolean("movies"))
+        }
+        "portal" -> Stalker.fetch(portalCfg(p))
+        else -> error("This playlist has no online source")
     }
 
-    // ---- Library tools
-    fun merge(ids: List<String>, name: String, dedupe: Boolean) {
-        val src = playlists.value.filter { it.id in ids }
-        var ch = src.flatMap { it.channels }
-        if (dedupe) ch = ch.distinctBy { it.url }
-        if (ch.isEmpty()) return
-        add(name.ifBlank { "Merged" }, "merged", ch, src.map { it.epgUrl }.firstOrNull { it.isNotBlank() } ?: "")
-        message.value = "Merged ${ch.size} channels"
+    fun refresh(id: String, replace: Boolean) {
+        viewModelScope.launch {
+            val p = playlists.value.firstOrNull { it.id == id } ?: return@launch
+            busy.value = "Refreshing ${p.name}…"
+            try {
+                val r = fetchFor(p)
+                val before = p.channels.size
+                edit(id) { old ->
+                    if (replace) r.channels
+                    else { val have = old.map { it.url }.toHashSet(); old + r.channels.filter { it.url !in have } }
+                }
+                update(id) { it.copy(info = r.info, state = 1, lastChecked = System.currentTimeMillis()) }
+                val after = playlists.value.firstOrNull { it.id == id }?.channels?.size ?: before
+                message.value = "Refreshed: $before → $after channels"
+            } catch (e: Exception) { message.value = "Refresh failed: ${Net.friendly(e)}" }
+            finally { busy.value = null }
+        }
+    }
+
+    // ------------------------------------------------------------ launch check (source + account)
+    private fun startupCheck() {
+        viewModelScope.launch {
+            for (p in playlists.value) verify(p)
+            if (store.deepCheck) for (p in playlists.value) runCheck(p.id, null, false)
+        }
+    }
+
+    private suspend fun verify(p: Playlist) {
+        try {
+            when (p.kind) {
+                "m3u" -> {
+                    val ok = Net.reachable(p.source)
+                    update(p.id) { it.copy(state = if (ok) 1 else 2, lastChecked = System.currentTimeMillis()) }
+                }
+                "xtream" -> {
+                    val m = try { JSONObject(p.meta) } catch (e: Exception) { JSONObject() }
+                    val info = Xtream.account(p.source, m.optString("user"), m.optString("pass"))
+                    update(p.id) { it.copy(state = 1, info = info, lastChecked = System.currentTimeMillis()) }
+                }
+                "portal" -> {
+                    val info = Stalker.account(portalCfg(p))
+                    update(p.id) { it.copy(state = 1, info = info, lastChecked = System.currentTimeMillis()) }
+                }
+                else -> {}
+            }
+        } catch (e: Exception) {
+            update(p.id) { it.copy(state = 2, lastChecked = System.currentTimeMillis()) }
+        }
+    }
+
+    fun recheckSources() { viewModelScope.launch { for (p in playlists.value) verify(p) } }
+
+    // ------------------------------------------------------------ channel checker
+    fun checkChannels(id: String, only: Set<Int>?, uncheckedOnly: Boolean) {
+        job?.cancel()
+        job = viewModelScope.launch { runCheck(id, only, uncheckedOnly) }
+    }
+
+    fun cancelCheck() { job?.cancel() }
+
+    private suspend fun runCheck(id: String, only: Set<Int>?, uncheckedOnly: Boolean) {
+        val p0 = playlists.value.firstOrNull { it.id == id } ?: return
+        val targets = p0.channels.withIndex()
+            .filter { (i, c) -> (only == null || i in only) && (!uncheckedOnly || c.status == 0) }
+            .map { it.index to it.value.url }
+        if (targets.isEmpty()) { message.value = "Nothing to check"; return }
+        val st = settings.value
+        val portal = if (p0.kind == "portal") portalCfg(p0) else null
+        val total = targets.size
+        var done = 0
+        busy.value = "Checking ${p0.name}"
+        progress.value = 0f
+        try {
+            for (chunk in targets.chunked(150)) {
+                val cur = playlists.value.firstOrNull { it.id == id }?.channels ?: break
+                val items = chunk.filter { (i, u) -> cur.getOrNull(i)?.url == u }
+                if (items.isNotEmpty()) {
+                    val res = Checker.run(items.map { cur[it.first] }, st.concurrency, st.timeout, portal)
+                    update(id) { p ->
+                        val arr = p.channels.toMutableList()
+                        items.forEachIndexed { k, (i, u) ->
+                            if (arr.getOrNull(i)?.url == u) arr[i] = arr[i].copy(status = res[k].status, ms = res[k].ms, note = res[k].note)
+                        }
+                        p.copy(channels = arr, lastChecked = System.currentTimeMillis())
+                    }
+                }
+                done += chunk.size
+                progress.value = done / total.toFloat()
+            }
+        } finally {
+            busy.value = null
+            progress.value = -1f
+        }
+        val fin = playlists.value.firstOrNull { it.id == id }?.channels ?: return
+        message.value = "Working ${fin.count { it.status == 1 }} • Dead ${fin.count { it.status == 2 }} • Unchecked ${fin.count { it.status == 0 }}"
+    }
+
+    // ------------------------------------------------------------ playlist operations
+    fun mergeInto(targetId: String, sourceId: String) {
+        val src = playlists.value.firstOrNull { it.id == sourceId }?.channels ?: return
+        edit(targetId) { old ->
+            val have = old.map { it.url }.toHashSet()
+            old + src.filter { it.url !in have }
+        }
+        message.value = "Merged"
     }
 
     fun copyTo(targetId: String, chs: List<Channel>) {
-        update(targetId) { p -> p.copy(channels = (p.channels + chs).distinctBy { it.url }) }
-        message.value = "Copied ${chs.size} channel(s)"
-    }
-
-    fun played(c: Channel) {
-        val l = (listOf(c) + recents.value.filter { it.url != c.url }).take(20)
-        recents.value = l
-        viewModelScope.launch(Dispatchers.IO) { store.saveRecents(l) }
-    }
-
-    /** Channel logo: playlist logo first, otherwise the icon from the guide (XMLTV). */
-    fun logo(c: Channel): String {
-        if (c.logo.startsWith("http")) return c.logo
-        for (d in epg.value.values) { val l = d.logoFor(c); if (l.isNotEmpty()) return l }
-        return ""
-    }
-
-    // ---- Playback / favorites
-    suspend fun resolve(url: String): String =
-        if (url.startsWith("portal://")) Stalker.resolve(url.removePrefix("portal://"), store.loadPortal()) else url
-
-    fun toggleFav(url: String) {
-        playlists.value = playlists.value.map { p ->
-            p.copy(channels = p.channels.map { if (it.url == url) it.copy(fav = !it.fav) else it })
+        edit(targetId) { old ->
+            val have = old.map { it.url }.toHashSet()
+            old + chs.filter { it.url !in have }
         }
-        persist()
+        message.value = "Copied ${chs.size} channels"
     }
 
-    // ---- Checks
-    fun autoCheck() {
-        viewModelScope.launch {
-            for (p in playlists.value) {
-                if (!p.source.startsWith("http")) continue
-                try {
-                    val text = Net.get(p.source)
-                    val fresh = withContext(Dispatchers.Default) { M3u.parse(text) }
-                    if (fresh.isNotEmpty()) {
-                        val favs = p.channels.filter { it.fav }.map { it.url }.toSet()
-                        val st = p.channels.associate { it.url to it.status }
-                        update(p.id) {
-                            it.copy(channels = fresh.map { c -> c.copy(fav = c.url in favs, status = st[c.url] ?: 0) },
-                                state = 1, lastChecked = System.currentTimeMillis())
-                        }
-                    } else update(p.id) { it.copy(state = 2, lastChecked = System.currentTimeMillis()) }
-                } catch (e: Exception) {
-                    update(p.id) { it.copy(state = 2, lastChecked = System.currentTimeMillis()) }
-                }
-            }
-            if (store.deepCheck) playlists.value.forEach { runCheck(it.id) }
-        }
-    }
-
-    fun checkChannels(id: String) { viewModelScope.launch { runCheck(id) } }
-
-    private suspend fun runCheck(id: String) {
-        val p = playlists.value.firstOrNull { it.id == id } ?: return
-        busy.value = "Checking ${p.name}"; progress.value = 0f
-        val res = Checker.checkAll(p.channels) { d, t -> progress.value = d / t.toFloat() }
-        update(id) { it.copy(channels = res, lastChecked = System.currentTimeMillis()) }
-        busy.value = null; progress.value = -1f
-        message.value = "Working: ${res.count { it.status == 1 }} • Dead: ${res.count { it.status == 2 }}"
-    }
-
-    fun export(uri: Uri, p: Playlist) {
+    fun exportTo(uri: Uri, text: String) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 getApplication<Application>().contentResolver.openOutputStream(uri)!!
-                    .bufferedWriter().use { it.write(M3u.export(p.channels, p.epgUrl)) }
-                message.value = "Exported ${p.channels.size} channels"
+                    .bufferedWriter().use { it.write(text) }
+                message.value = "Exported"
             } catch (e: Exception) { message.value = "Export failed" }
+        }
+    }
+
+    /** Opens a channel in any installed player (VLC, MX Player ...). */
+    fun openExternal(ctx: Context, p: Playlist, c: Channel) {
+        viewModelScope.launch {
+            try {
+                val u = if (c.url.startsWith("portal://")) Stalker.resolve(c.url.removePrefix("portal://"), portalCfg(p)) else c.url
+                val i = Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(u), "video/*")
+                ctx.startActivity(Intent.createChooser(i, "Open with").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            } catch (e: Exception) { message.value = "Could not open: ${Net.friendly(e)}" }
         }
     }
 }
