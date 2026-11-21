@@ -4,6 +4,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -19,8 +21,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -30,6 +35,20 @@ private fun Item(text: String, onClick: () -> Unit) {
     DropdownMenuItem(text = { Text(text) }, onClick = onClick)
 }
 
+@Composable
+private fun StatTile(label: String, count: Int, color: Color, selected: Boolean, onClick: () -> Unit) {
+    val shape = RoundedCornerShape(16.dp)
+    Column(
+        Modifier.width(96.dp).clip(shape)
+            .background(if (selected) color.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceVariant)
+            .border(1.dp, if (selected) color else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), shape)
+            .clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 10.dp)
+    ) {
+        Text("$count", style = MaterialTheme.typography.titleMedium, color = color)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ChannelRow(c: Channel, selected: Boolean, selecting: Boolean, onClick: () -> Unit, onLong: () -> Unit) {
@@ -37,11 +56,11 @@ private fun ChannelRow(c: Channel, selected: Boolean, selecting: Boolean, onClic
         Modifier.fillMaxWidth()
             .background(if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f) else Color.Transparent)
             .combinedClickable(onClick = onClick, onLongClick = onLong)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .padding(horizontal = 16.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (selecting) Checkbox(selected, null) else Logo(c, 42)
-        Spacer(Modifier.width(12.dp))
+        if (selecting) Checkbox(selected, null) else Logo(c, 44)
+        Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(c.name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
             Text(c.group.ifBlank { "Ungrouped" }, maxLines = 1, overflow = TextOverflow.Ellipsis,
@@ -56,11 +75,14 @@ private fun ChannelRow(c: Channel, selected: Boolean, selecting: Boolean, onClic
 @Composable
 fun EditorScreen(vm: MainVm, pl: Playlist, onBack: () -> Unit) {
     val ctx = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val view by vm.view.collectAsState()
     val filter by vm.qFilter.collectAsState()
     val group by vm.qGroup.collectAsState()
     val undoable by vm.canUndo.collectAsState()
     val allPls by vm.playlists.collectAsState()
+    val busy by vm.busy.collectAsState()
+    val checking = busy?.startsWith("Checking") == true
     val others = remember(allPls, pl.id) { allPls.filter { it.id != pl.id } }
 
     var text by remember { mutableStateOf("") }
@@ -96,10 +118,11 @@ fun EditorScreen(vm: MainVm, pl: Playlist, onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
                 title = {
                     if (sel.isNotEmpty()) Text("${sel.size} selected")
                     else Column {
-                        Text(pl.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(pl.name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
                         Text("${view.rows.size} of ${view.total} channels", style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -164,6 +187,15 @@ fun EditorScreen(vm: MainVm, pl: Playlist, onBack: () -> Unit) {
                     }
                 })
         },
+        floatingActionButton = {
+            if (sel.isEmpty()) ExtendedFloatingActionButton(onClick = {
+                if (checking) vm.cancelCheck() else vm.checkChannels(pl.id, null, view.unk > 0)
+            }) {
+                if (checking) Ic(R.drawable.ic_stop, size = 20.dp) else Icon(Icons.Default.PlayArrow, null)
+                Spacer(Modifier.width(8.dp))
+                Text(if (checking) "Stop" else if (view.unk > 0) "Check ${view.unk} new" else "Re-check all")
+            }
+        },
         bottomBar = {
             if (sel.isNotEmpty()) BottomAppBar {
                 Row(Modifier.horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
@@ -180,37 +212,40 @@ fun EditorScreen(vm: MainVm, pl: Playlist, onBack: () -> Unit) {
         }
     ) { pad ->
         Column(Modifier.padding(pad)) {
-            OutlinedTextField(text, { text = it; vm.setQuery(it) }, Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-                placeholder = { Text("Search channels or categories") }, singleLine = true,
-                shape = RoundedCornerShape(16.dp), leadingIcon = { Icon(Icons.Default.Search, null) },
-                trailingIcon = { if (text.isNotEmpty()) IconButton({ text = ""; vm.setQuery("") }) { Icon(Icons.Default.Close, "Clear") } })
+            Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(text, { text = it; vm.setQuery(it) }, Modifier.fillMaxWidth(),
+                    placeholder = { Text("Search channels or categories") }, singleLine = true,
+                    shape = RoundedCornerShape(16.dp), leadingIcon = { Icon(Icons.Default.Search, null) },
+                    trailingIcon = { if (text.isNotEmpty()) IconButton({ text = ""; vm.setQuery("") }) { Icon(Icons.Default.Close, "Clear") } })
 
-            if (text.isNotBlank() && view.matched.isNotEmpty()) {
-                Text("Matching categories", Modifier.padding(start = 16.dp, top = 8.dp),
-                    style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                LazyRow(contentPadding = PaddingValues(12.dp, 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(view.matched, key = { it.name }) { g ->
-                        AssistChip({ vm.setGroup(g.name) }, { Text(g.name.ifBlank { "Ungrouped" } + "  ${g.count}", maxLines = 1) })
+                if (text.isNotBlank() && view.matched.isNotEmpty()) {
+                    Text("Matching categories", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(view.matched, key = { it.name }) { g ->
+                            AssistChip({ vm.setGroup(g.name) }, { Text(g.name.ifBlank { "Ungrouped" } + "  ${g.count}", maxLines = 1) })
+                        }
                     }
                 }
-            }
 
-            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedButton({ catSheet = true }, Modifier.weight(1f), shape = RoundedCornerShape(14.dp)) {
-                    Text("📂  " + (group?.ifBlank { "Ungrouped" } ?: "All categories") + "  ·  ${view.groups.size}",
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedButton({ catSheet = true }, Modifier.weight(1f).height(46.dp), shape = RoundedCornerShape(14.dp)) {
+                        Ic(R.drawable.ic_label, Pal.blue, 18.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text((group?.ifBlank { "Ungrouped" } ?: "All categories") + "  ·  ${view.groups.size}",
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    if (group != null) IconButton({ vm.setGroup(null) }) { Icon(Icons.Default.Close, "Show all categories") }
                 }
-                if (group != null) IconButton({ vm.setGroup(null) }) { Icon(Icons.Default.Close, "Show all categories") }
             }
 
-            LazyRow(contentPadding = PaddingValues(12.dp, 0.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                item { FilterChip(filter == 0, { vm.setFilter(0) }, { Text("All ${view.total}") }) }
-                item { FilterChip(filter == 1, { vm.setFilter(1) }, { Text("✓ Working ${view.ok}") }) }
-                item { FilterChip(filter == 2, { vm.setFilter(2) }, { Text("✕ Dead ${view.dead}") }) }
-                item { FilterChip(filter == 3, { vm.setFilter(3) }, { Text("? Unchecked ${view.unk}") }) }
-                item { FilterChip(filter == 4, { vm.setFilter(4) }, { Text("⧉ Duplicates ${view.dup}") }) }
+            LazyRow(contentPadding = PaddingValues(16.dp, 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                item { StatTile("All", view.total, Pal.blue, filter == 0) { vm.setFilter(0) } }
+                item { StatTile("Working", view.ok, Pal.ok, filter == 1) { vm.setFilter(1) } }
+                item { StatTile("Dead", view.dead, Pal.bad, filter == 2) { vm.setFilter(2) } }
+                item { StatTile("Unchecked", view.unk, Pal.unk, filter == 3) { vm.setFilter(3) } }
+                item { StatTile("Duplicates", view.dup, Pal.warn, filter == 4) { vm.setFilter(4) } }
             }
-            Box(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) { StatBar(view.ok, view.dead, view.unk, 5) }
+            Box(Modifier.padding(horizontal = 16.dp, vertical = 2.dp)) { StatBar(view.ok, view.dead, view.unk, 5) }
 
             LazyColumn(Modifier.fillMaxSize(), state = listState) {
                 if (view.rows.isEmpty()) item {
@@ -223,9 +258,9 @@ fun EditorScreen(vm: MainVm, pl: Playlist, onBack: () -> Unit) {
                 items(view.rows, key = { it.index }) { r ->
                     ChannelRow(r.ch, r.index in sel, sel.isNotEmpty(),
                         onClick = { if (sel.isNotEmpty()) toggle(r.index) else editIdx = r.index },
-                        onLong = { toggle(r.index) })
+                        onLong = { haptic.performHapticFeedback(HapticFeedbackType.LongPress); toggle(r.index) })
                 }
-                item { Spacer(Modifier.height(24.dp)) }
+                item { Spacer(Modifier.height(96.dp)) }
             }
         }
     }

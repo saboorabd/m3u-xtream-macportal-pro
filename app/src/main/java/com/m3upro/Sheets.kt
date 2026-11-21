@@ -68,7 +68,7 @@ fun CategorySheet(
                         ListItem(modifier = Modifier.combinedClickable(onClick = { onPick(null) }),
                             headlineContent = { Text("All categories", fontWeight = FontWeight.SemiBold) },
                             trailingContent = { Text("$total") },
-                            leadingContent = { Text("📂") })
+                            leadingContent = { Ic(R.drawable.ic_label, Pal.blue) })
                     }
                     items(list, key = { it.name }) { g ->
                         ListItem(
@@ -76,7 +76,7 @@ fun CategorySheet(
                             headlineContent = { Text(g.name.ifBlank { "Ungrouped" }, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                             supportingContent = { StatBar(g.ok, g.dead, g.count - g.ok - g.dead, 4) },
                             trailingContent = { Text("${g.count}") },
-                            leadingContent = { if (selected == g.name) Text("✓", color = Pal.ok, fontWeight = FontWeight.Bold) else Text("📁") })
+                            leadingContent = { if (selected == g.name) Icon(Icons.Default.Check, null, tint = Pal.ok) else Ic(R.drawable.ic_label, Pal.unk) })
                     }
                     item { Text("Tip: long-press a category to rename, merge or delete it.", Modifier.padding(16.dp),
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }

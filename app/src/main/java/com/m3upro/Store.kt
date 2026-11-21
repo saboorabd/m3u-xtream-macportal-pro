@@ -60,7 +60,13 @@ class Store(private val ctx: Context) {
                 channels = list, info = o.optString("info"), epg = o.optString("epg")
             )
         }
-    } catch (e: Exception) { emptyList() }
+    } catch (e: Exception) {
+        if (file.exists()) {
+            DebugLog.e("Store.load failed - keeping a copy as playlists.json.bad", e)
+            try { file.copyTo(File(file.path + ".bad"), overwrite = true) } catch (x: Exception) { /* ignore */ }
+        }
+        emptyList()
+    }
 
     fun save(list: List<Playlist>) {
         val arr = JSONArray()

@@ -29,6 +29,7 @@ fun PortalScreen(vm: MainVm, init: Smart?, onBack: () -> Unit) {
     var d1 by remember { mutableStateOf(init?.d1 ?: "") }
     var d2 by remember { mutableStateOf(init?.d2 ?: "") }
     val clip = LocalClipboardManager.current
+    val busy by vm.busy.collectAsState()
     val macOk = Regex("^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$").matches(mac.trim())
 
     fun fill(s: Smart) {
@@ -61,17 +62,24 @@ fun PortalScreen(vm: MainVm, init: Smart?, onBack: () -> Unit) {
     }) { pad ->
         Column(Modifier.padding(pad).padding(16.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+            SoftCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp)) {
-                    Text("Paste all details", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Ic(R.drawable.ic_sparkle, Pal.violet, 20.dp)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Paste all details", style = MaterialTheme.typography.titleMedium)
+                    }
                     Text("Paste the whole block: URL, MAC, serial, device IDs. The fields below fill themselves.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     OutlinedTextField(paste, { onPaste(it) }, Modifier.fillMaxWidth().padding(top = 8.dp),
                         placeholder = { Text("Mac url: http://…\nMac address: 00:1A:79:…\nSerial no: …\nDevice id 1: …\nDevice id 2: …") },
                         minLines = 3, maxLines = 6, shape = RoundedCornerShape(14.dp))
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
-                        OutlinedButton({ clip.getText()?.text?.let { onPaste(it) } }) { Text("Paste") }
+                        OutlinedButton({ clip.getText()?.text?.let { onPaste(it) } }) {
+                            Ic(R.drawable.ic_paste, size = 18.dp)
+                            Spacer(Modifier.width(6.dp))
+                            Text("Paste")
+                        }
                         Spacer(Modifier.width(12.dp))
                         Checkbox(auto, { auto = it })
                         Text("Fetch automatically", style = MaterialTheme.typography.bodySmall)
@@ -88,11 +96,14 @@ fun PortalScreen(vm: MainVm, init: Smart?, onBack: () -> Unit) {
             OutlinedTextField(sn, { sn = it }, Modifier.fillMaxWidth(), label = { Text("Serial number") }, singleLine = true)
             OutlinedTextField(d1, { d1 = it }, Modifier.fillMaxWidth(), label = { Text("Device ID 1") }, singleLine = true)
             OutlinedTextField(d2, { d2 = it }, Modifier.fillMaxWidth(), label = { Text("Device ID 2") }, singleLine = true)
-            Button(
-                onClick = { vm.portalLogin(name.trim(), PortalCfg(url.trim(), mac.trim(), d1.trim(), d2.trim(), sn.trim()), onBack) },
-                enabled = url.isNotBlank() && macOk, modifier = Modifier.fillMaxWidth().height(54.dp),
-                shape = RoundedCornerShape(16.dp)
-            ) { Text("Fetch channels", fontWeight = FontWeight.Bold) }
+            GradientButton("Fetch channels",
+                { vm.portalLogin(name.trim(), PortalCfg(url.trim(), mac.trim(), d1.trim(), d2.trim(), sn.trim()), onBack) },
+                Modifier.fillMaxWidth(), enabled = url.isNotBlank() && macOk && busy == null, icon = R.drawable.ic_router)
+            if (busy != null) Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(10.dp))
+                Text(busy ?: "", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             Text("Account expiry is shown on the playlist card. Use \"Get real stream links\" in the editor to turn portal channels into direct URLs.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }

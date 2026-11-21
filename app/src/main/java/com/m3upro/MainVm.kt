@@ -208,13 +208,14 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     fun addFromUrl(name: String, url: String) {
         viewModelScope.launch {
             busy.value = "Downloading playlist…"
+            DebugLog.d("add m3u $url")
             try {
                 val p = withContext(Dispatchers.IO) { Net.http.open(url, emptyMap(), 120).use { M3u.parseStream(it) } }
                 if (p.channels.isEmpty()) error("No channels found in this playlist")
                 val nm = name.ifBlank { url.substringAfterLast('/').substringBefore('?').substringBeforeLast('.').ifBlank { hostOf(url) } }
                 addPlaylist(nm, "m3u", url, "", p.channels, "", p.epg)
                 message.value = "Added ${p.channels.size} channels"
-            } catch (e: Exception) { message.value = "Could not load: ${Net.friendly(e)}" }
+            } catch (e: Exception) { DebugLog.e("addFromUrl $url", e); message.value = "Could not load: ${Net.friendly(e)}" }
             finally { busy.value = null }
         }
     }
@@ -227,7 +228,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
                 if (p.channels.isEmpty()) error("No channels found in the text")
                 addPlaylist(name.ifBlank { "Pasted playlist" }, "text", "", "", p.channels, "", p.epg)
                 message.value = "Added ${p.channels.size} channels"
-            } catch (e: Exception) { message.value = "Could not read: ${Net.friendly(e)}" }
+            } catch (e: Exception) { DebugLog.e("addFromText", e); message.value = "Could not read: ${Net.friendly(e)}" }
             finally { busy.value = null }
         }
     }
@@ -243,7 +244,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
                 val nm = uri.lastPathSegment?.substringAfterLast('/')?.substringBeforeLast('.') ?: "Local playlist"
                 addPlaylist(nm.ifBlank { "Local playlist" }, "file", "", "", p.channels, "", p.epg)
                 message.value = "Added ${p.channels.size} channels"
-            } catch (e: Exception) { message.value = "Could not read: ${Net.friendly(e)}" }
+            } catch (e: Exception) { DebugLog.e("addFromUri", e); message.value = "Could not read: ${Net.friendly(e)}" }
             finally { busy.value = null }
         }
     }
@@ -251,6 +252,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     fun xtreamLogin(name: String, server: String, user: String, pass: String, ext: String, movies: Boolean, onDone: () -> Unit = {}) {
         viewModelScope.launch {
             busy.value = "Logging in…"
+            DebugLog.d("xtream login server=$server user=$user ext=$ext movies=$movies")
             try {
                 val r = withContext(Dispatchers.IO) { Xtream.fetch(Net.http, server, user, pass, ext, movies) { stage(it) } }
                 if (r.channels.isEmpty()) error("No channels returned")
@@ -258,7 +260,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
                 addPlaylist(name.ifBlank { "Xtream: " + hostOf(server) }, "xtream", Xtream.base(server), meta, r.channels, r.info, "")
                 message.value = "Added ${r.channels.size} channels"
                 onDone()
-            } catch (e: Exception) { message.value = Net.friendly(e) }
+            } catch (e: Exception) { DebugLog.e("xtreamLogin $server", e); message.value = Net.friendly(e) }
             finally { busy.value = null }
         }
     }
@@ -266,13 +268,14 @@ class MainVm(app: Application) : AndroidViewModel(app) {
     fun portalLogin(name: String, cfg: PortalCfg, onDone: () -> Unit = {}) {
         viewModelScope.launch {
             busy.value = "Connecting to portal…"
+            DebugLog.d("portal login url=${cfg.url} mac=${cfg.mac} sn=${if (cfg.serial.isBlank()) "-" else "set"} id1=${if (cfg.deviceId.isBlank()) "-" else "set"} id2=${if (cfg.deviceId2.isBlank()) "-" else "set"}")
             try {
                 val r = withContext(Dispatchers.IO) { Stalker.fetch(Net.http, cfg) { stage(it) } }
                 val meta = JSONObject().put("mac", cfg.mac).put("d1", cfg.deviceId).put("d2", cfg.deviceId2).put("sn", cfg.serial).toString()
                 addPlaylist(name.ifBlank { "Portal: " + hostOf(cfg.url) }, "portal", cfg.url, meta, r.channels, r.info, "")
                 message.value = "Added ${r.channels.size} channels"
                 onDone()
-            } catch (e: Exception) { message.value = Net.friendly(e) }
+            } catch (e: Exception) { DebugLog.e("portalLogin ${cfg.url}", e); message.value = Net.friendly(e) }
             finally { busy.value = null }
         }
     }
@@ -317,7 +320,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
                 persist(true)
                 val after = playlists.value.firstOrNull { it.id == id }?.channels?.size ?: before
                 message.value = "Refreshed: $before → $after channels"
-            } catch (e: Exception) { message.value = "Refresh failed: ${Net.friendly(e)}" }
+            } catch (e: Exception) { DebugLog.e("refresh ${p.name}", e); message.value = "Refresh failed: ${Net.friendly(e)}" }
             finally { busy.value = null }
         }
     }
@@ -349,6 +352,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
                 else -> {}
             }
         } catch (e: Exception) {
+            DebugLog.e("verify ${p.name} (${p.kind})", e)
             update(p.id) { it.copy(state = 2, lastChecked = System.currentTimeMillis()) }
         }
     }
@@ -426,7 +430,13 @@ class MainVm(app: Application) : AndroidViewModel(app) {
             persist(true)
         }
         val fin = playlists.value.firstOrNull { it.id == id }?.channels ?: return
+        DebugLog.d("check ${p0.name}: working=${fin.count { it.status == 1 }} dead=${fin.count { it.status == 2 }} unchecked=${fin.count { it.status == 0 }}")
         message.value = "Working ${fin.count { it.status == 1 }} • Dead ${fin.count { it.status == 2 }} • Unchecked ${fin.count { it.status == 0 }}"
+    }
+
+    fun checkAllPlaylists() {
+        job?.cancel()
+        job = viewModelScope.launch { for (p in playlists.value) runCheck(p.id, null, false) }
     }
 
     /** MAC portal: replace portal://cmd with the real stream URL (original kept in [Channel.raw]). */
@@ -510,7 +520,7 @@ class MainVm(app: Application) : AndroidViewModel(app) {
                     withContext(Dispatchers.IO) { Stalker.resolve(Net.http, c.url.removePrefix("portal://"), portalCfg(p)) } else c.url
                 val i = Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(u), "video/*")
                 ctx.startActivity(Intent.createChooser(i, "Open with").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            } catch (e: Exception) { message.value = "Could not open: ${Net.friendly(e)}" }
+            } catch (e: Exception) { DebugLog.e("openExternal", e); message.value = "Could not open: ${Net.friendly(e)}" }
         }
     }
 }
