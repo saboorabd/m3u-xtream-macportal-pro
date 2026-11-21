@@ -14,6 +14,7 @@ jobs:
       - name: Apply update.zip and repair project layout
         run: |
           if [ -f update.zip ]; then
+            rm -rf app/src/main/java/com/m3upro
             unzip -o update.zip
             rm -f update.zip
           fi
@@ -22,8 +23,17 @@ jobs:
           git config user.name "github-actions"
           git config user.email "actions@github.com"
           git add -A
-          git commit -m "Repair project layout" || true
+          git commit -m "Apply update and repair layout" || true
           git push || true
+      - name: Bundle default playlist into the APK
+        run: |
+          mkdir -p app/src/main/assets
+          if curl -fsSL --max-time 60 "https://raw.githubusercontent.com/saboorabd/Tamil-iptv-player/main/public/playlist.m3u" -o /tmp/default.m3u && grep -q "#EXTM3U" /tmp/default.m3u; then
+            cp /tmp/default.m3u app/src/main/assets/default.m3u
+            echo "Bundled $(grep -c '^#EXTINF' /tmp/default.m3u) channels"
+          else
+            echo "Repo playlist not available, skipping"
+          fi
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
